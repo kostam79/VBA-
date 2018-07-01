@@ -1,0 +1,1 @@
+First draft:The present model object returns the fair value based on a martingale assumption(risk-neutral) using three types of models:Geometric Brownian Motion,Jump-difussion process and Square-Root Difussion. 

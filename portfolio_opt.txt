@@ -1,0 +1,143 @@
+Sub googlefin()
+Dim data As Worksheet: Set data = ThisWorkbook.Worksheets("data")
+'Dim tickers() As Variant
+tickers = [{"SPY","EEM","GLD","TLT","VNQ","QQQ","XLU","VIG"}]:
+'Activate and clear previous entries
+Sheets("data").Activate
+[g2:x10000].ClearContents: Range("b8:b300").ClearContents
+'Update Tickers labels
+Cells(2, 7).Resize(1, UBound(tickers)) = tickers
+Dim target As Range: Set target = Range("g2").End(xlToRight).Offset(1, 3)
+Range("b8").Resize(UBound(tickers, 1)) = WorksheetFunction.Transpose(tickers)
+target.Resize(1, UBound(tickers)) = tickers
+target.Offset(1, -1).Resize(UBound(tickers, 1)) = WorksheetFunction.Transpose(tickers)
+'Start loop connect google API,retrieve historical data
+For Each Ticker In tickers 'In Sheets("data").Range("e3", Range("e3").End(xlDown))
+'Create URL retrieve data since 2004
+qurl = "http://finance.google.com/finance/historical?q=" & Ticker & "&startdate=Jan+1%2C+2004&enddate=Mar+4%2C+2018&num=30&ei=j7CbWsGHPJeHsAGjs7boDQ&output=csv"
+
+    With data.QueryTables.Add(Connection:= _
+        "TEXT;" & qurl & "" _
+        , Destination:=Sheets("data").Range("$g$3").Offset(0, z))
+        .Name = "tbl"
+        .FieldNames = True
+        .RowNumbers = False
+        .FillAdjacentFormulas = False
+        .PreserveFormatting = True
+        .RefreshOnFileOpen = False
+        .RefreshStyle = xlInsertDeleteCells
+        .SavePassword = False
+        .SaveData = True
+        .AdjustColumnWidth = True
+        .RefreshPeriod = 0
+        .TextFilePromptOnRefresh = False
+        .TextFilePlatform = 65001
+        .TextFileStartRow = 1
+        .TextFileParseType = xlDelimited
+        .TextFileTextQualifier = xlTextQualifierDoubleQuote
+        .TextFileConsecutiveDelimiter = False
+        .TextFileTabDelimiter = True
+        .TextFileSemicolonDelimiter = False
+        .TextFileCommaDelimiter = True
+        .TextFileSpaceDelimiter = False
+        .TextFileColumnDataTypes = Array(9, 9, 9, 9, 1, 9)
+        .TextFileTrailingMinusNumbers = True
+        .Refresh BackgroundQuery:=False
+    End With
+z = z + 1
+Next
+'Create matriz() Array, use it to fill tolog() matriz-->averages,var-covar matriz
+Worksheets("data").Activate
+Dim start As Range: Set start = Worksheets("data").Range("starto"): Dim contador As Double: contador = contar(start) - 1
+'Create varcovar matrix
+Call varcovar(start, target, contador)
+End Sub
+
+Sub varcovar(ByRef inicio, ByRef target, ByVal contador)
+Dim contarcol As Integer: contarcol = Range(inicio, inicio.End(xlToRight)).Count
+'Create log ret= matriz
+Dim matriz() As Variant: ReDim matriz(1 To contador, 1 To contarcol)
+For col = 1 To contarcol
+    For i = 1 To contador
+        matriz(i, col) = Application.WorksheetFunction.Ln(Range("starto").Offset(i - 1, col - 1) / Range("starto").Offset(i, col - 1))
+    Next i
+Next col
+'Create average returns matrix
+Dim x() As Variant: ReDim x(1 To 1, 1 To contarcol)
+For i = 1 To contarcol
+    x(1, i) = Application.WorksheetFunction.Average(WorksheetFunction.Index(matriz, 0, i))
+Next i
+'neto
+Dim neto() As Variant: ReDim neto(1 To UBound(matriz, 1), 1 To UBound(matriz, 2))
+For col = 1 To UBound(matriz, 2)
+    For r = 1 To UBound(matriz, 1)
+        neto(r, col) = matriz(r, col) - x(1, col)
+    Next r
+Next col
+'Create varcovar matrix
+Dim covap() As Variant: ReDim covap(1 To UBound(neto, 2), 1 To UBound(neto, 2))
+covap = Application.WorksheetFunction.MMult(WorksheetFunction.Transpose(neto), neto)
+target.Offset(1).Resize(UBound(matriz, 2), UBound(matriz, 2)) = covap
+'Add average value
+Range("c8").Resize(UBound(x, 2)) = WorksheetFunction.Transpose(x)
+'Add portfolio stdev/ADD wei
+Range("d8").Resize(UBound(x, 2), 1).Value = x
+Dim wei As Range: Set wei = Range("d8", Range("d8").End(xlDown)): wei.Interior.ColorIndex = 36
+'Range("d6").Value = (WorksheetFunction.MMult(WorksheetFunction.Transpose(wei), WorksheetFunction.MMult(covap, wei))(1) / divisor) ^ (0.5) * (252) ^ (0.5)
+'Add portfolio returns and SHARPE  with formulas.First add names
+Dim inicio2 As Range: Set inicio2 = target.Offset(1): Dim covarvar As Range: Set covarvar = squareselect(inicio2): covarvar.Interior.ColorIndex = 37
+Cells(3, 4).Value = contador
+ThisWorkbook.Worksheets("data").Names.Add Name:="covarvar", RefersToR1C1:=covarvar
+ThisWorkbook.Worksheets("data").Names.Add Name:="wei", RefersToR1C1:=wei
+Range("d5").Formula = "=SUMPRODUCT(OFFSET(wei,,-1,COUNT(wei),),wei)*252"
+Range("d6").FormulaArray = "=SQRT(MMULT(TRANSPOSE(wei),MMULT(covarvar,wei))/D3)*SQRT(252)"
+Range("d2").FormulaR1C1 = "=R[3]C[0]/R[4]C[0]":
+'Now solver for different risk profiles
+Dim riesgo As Range: Set riesgo = Range("d4")
+    SolverReset
+    SolverOk SetCell:="$D$2", MaxMinVal:=1, ValueOf:=0, ByChange:=wei.Address, _
+        Engine:=1, EngineDesc:="GRG Nonlinear"
+    SolverAdd CellRef:="$E$8", Relation:=2, FormulaText:="1"
+    SolverOk SetCell:="$D$2", MaxMinVal:=1, ValueOf:=0, ByChange:=wei.Address, _
+        Engine:=1, EngineDesc:="GRG Nonlinear"
+    SolverAdd CellRef:="$D$6", Relation:=2, FormulaText:=CStr(riesgo)
+    SolverOk SetCell:="$D$2", MaxMinVal:=1, ValueOf:=0, ByChange:=wei.Address, _
+        Engine:=1, EngineDesc:="GRG Nonlinear"
+    SolverOk SetCell:="$D$2", MaxMinVal:=1, ValueOf:=0, ByChange:=wei.Address, _
+        Engine:=1, EngineDesc:="GRG Nonlinear"
+    SolverSolve
+
+
+End Sub
+Function squareselect(ByRef rango) As Range
+Set squareselect = Range(Range(rango, rango.End(xlDown)), Range(rango, rango.End(xlToRight)))
+End Function
+Sub prueba()
+Worksheets("data").Activate
+Dim wei As Range: Set wei = Range("d8", Range("d8").End(xlDown))
+Dim covap As Range: Set covap = Range("o4:t9"): Dim pepe As Double
+Dim riesgo As Range: Set riesgo = Range("d4")
+Dim inicio2 As Range: Set inicio2 = Range("o4"): Dim covarvar As Range: Set covarvar = squareselect(inicio2)
+covarvar.Interior.ColorIndex = 37: wei.Interior.ColorIndex = 36
+
+ThisWorkbook.Worksheets("data").Names.Add Name:="covarvar", RefersToR1C1:=covarvar
+ThisWorkbook.Worksheets("data").Names.Add Name:="wei", RefersToR1C1:=wei
+Range("d5").Formula = "=SUMPRODUCT(OFFSET(wei,,-1,COUNT(wei),),D8:D13)*12"
+Range("d6").FormulaArray = "=SQRT(MMULT(TRANSPOSE(wei),MMULT(covarvar,wei))/D3)*SQRT(252)"
+Range("d2").FormulaR1C1 = "=R[3]C[0]/R[4]C[0]":
+End Sub
+Function contar(ByRef minimo) As Double
+'Dim rango As Range: 'Set rango = Range(Range("g4", Range("g4").End(xlDown)), Range("g4", Range("g4").End(xlToRight)))
+'Set rango = Range(Range(minimo, minimo.End(xlDown)), Range(minimo, Range(minimo, minimo.End(xlToRight))))
+Dim cols As Integer: cols = Range(minimo, minimo.End(xlToRight)).Count: Dim resultado As Double
+resultado = Range(minimo, minimo.End(xlDown)).Count: Dim res As Double
+'Debug.Print resultado
+For i = 1 To cols - 1
+    res = Range(minimo.Offset(, i), minimo.Offset(, i).End(xlDown)).Count
+    If res < resultado Then
+        resultado = res
+    End If
+    Debug.Print minimo
+Next i
+contar = resultado
+End Function
